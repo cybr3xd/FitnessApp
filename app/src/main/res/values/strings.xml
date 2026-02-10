@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">FitnessApp</string>
+    <string name="task_type_distance">Дистанция (м)</string>
+    <string name="task_type_calories">Калории (ккал)</string>
+    <string name="task_type_steps">Шаги</string>
+    <string name="task_type_time">Время (мин)</string>
+    <string name="task_done">Выполнена</string>
+    <string name="task_not_done">Не выполнена</string>
+    <string-array name="task_types">
+        <item>@string/task_type_distance</item>
+        <item>@string/task_type_calories</item>
+        <item>@string/task_type_steps</item>
+        <item>@string/task_type_time</item>
+    </string-array>
+</resources>

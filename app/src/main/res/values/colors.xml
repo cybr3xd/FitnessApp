@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary palette - свежий зелёный для фитнеса -->
+    <color name="primary">#00BFA5</color>
+    <color name="primary_dark">#00897B</color>
+    <color name="primary_light">#5DF2D6</color>
+    <color name="accent">#FF6D00</color>
+
+    <!-- Surfaces -->
+    <color name="background">#F5F7FA</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_variant">#E8EDF2</color>
+    <color name="card_background">#FFFFFF</color>
+
+    <!-- Text -->
+    <color name="text_primary">#1A1D21</color>
+    <color name="text_secondary">#5C6369</color>
+    <color name="text_on_primary">#FFFFFF</color>
+
+    <!-- Legacy / compatibility -->
+    <color name="black">#1A1D21</color>
+    <color name="white">#FFFFFF</color>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="error">#B00020</color>
+</resources>
