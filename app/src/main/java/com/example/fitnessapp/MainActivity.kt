@@ -1,8 +1,15 @@
 package com.example.fitnessapp
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.hardware.Sensor
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.core.content.ContextCompat
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
@@ -93,11 +100,42 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private var isChronometerPaused = false
 
+    private val refreshHandler = Handler(Looper.getMainLooper())
+    private val refreshFromPrefsRunnable = object : Runnable {
+        override fun run() {
+            if (!isStatsObserveable) return
+            val p = sessionPrefs()
+            currStepCounter = p.getFloat(PREF_CURR_STEPS, 0f)
+            distanceSpent = p.getFloat(PREF_DISTANCE, 0f)
+            kcalBurned = p.getFloat(PREF_KCAL, 0f)
+            isChronometerPaused = p.getBoolean(PREF_PAUSED, false)
+            elapsedWhenPaused = p.getLong(PREF_ELAPSED_PAUSED, 0L)
+            updateStatsDisplay()
+            if (isChronometerPaused) {
+                cChronometer.base = SystemClock.elapsedRealtime() - elapsedWhenPaused
+                cChronometer.stop()
+            } else {
+                val base = p.getLong(PREF_CHRONO_BASE, 0L)
+                if (base != 0L) {
+                    cChronometer.base = base
+                    cChronometer.start()
+                }
+            }
+            refreshHandler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun sessionPrefs(): SharedPreferences =
+        getSharedPreferences("session", Context.MODE_PRIVATE)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         setContentView(R.layout.activity_main)
+
+        // Восстановление сессии из памяти (savedInstanceState) или из SharedPreferences
+        restoreSessionFromPrefsOrBundle(savedInstanceState)
 
         bTasksButton.setOnClickListener {
             val intent = Intent(this, TasksActivity::class.java)
@@ -122,6 +160,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             cChronometer.base = SystemClock.elapsedRealtime()
             cChronometer.start()
 
+            saveSessionToPrefs()
+            startSessionService()
             bStartButton.visibility = View.GONE
             bPauseButton.visibility = View.VISIBLE
             bStopButton.visibility = View.VISIBLE
@@ -142,10 +182,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 isChronometerPaused = true
                 bPauseButton.text = "Продолжить"
             }
+            saveSessionToPrefs()
         }
 
         bStopButton.setOnClickListener {
             // Остановка сессии и сохранение в историю
+            stopSessionService()
+            refreshHandler.removeCallbacks(refreshFromPrefsRunnable)
+            // Берём последние значения из префов (сервис мог обновлять их в фоне)
+            val p = sessionPrefs()
+            currStepCounter = p.getFloat(PREF_CURR_STEPS, currStepCounter)
+            distanceSpent = p.getFloat(PREF_DISTANCE, distanceSpent)
+            kcalBurned = p.getFloat(PREF_KCAL, kcalBurned)
             cChronometer.stop()
             isStatsObserveable = false
             stepCounterBase = stepCounter
@@ -169,6 +217,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             kcalBurned = 0f
             isChronometerPaused = false
 
+            clearSessionPrefs()
             bPauseButton.visibility = View.GONE
             bStopButton.visibility = View.GONE
             bStartButton.visibility = View.VISIBLE
@@ -177,14 +226,171 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         }
     }
 
+    /** Сохраняет состояние сессии в SharedPreferences (чтобы пережить переход в Задачи/Историю). */
+    private fun saveSessionToPrefs() {
+        val elapsed = if (isChronometerPaused) elapsedWhenPaused else SystemClock.elapsedRealtime() - cChronometer.base
+        sessionPrefs().edit()
+            .putBoolean(PREF_ACTIVE, true)
+            .putLong(PREF_CHRONO_BASE, cChronometer.base)
+            .putBoolean(PREF_PAUSED, isChronometerPaused)
+            .putLong(PREF_ELAPSED_PAUSED, elapsedWhenPaused)
+            .putFloat(PREF_STEP_BASE, stepCounterBase)
+            .putFloat(PREF_CURR_STEPS, currStepCounter)
+            .putFloat(PREF_DISTANCE, distanceSpent)
+            .putFloat(PREF_KCAL, kcalBurned)
+            .apply()
+    }
+
+    private fun clearSessionPrefs() {
+        sessionPrefs().edit().clear().apply()
+    }
+
+    /** Восстанавливает сессию из SharedPreferences или из Bundle (при пересоздании активности). */
+    private fun restoreSessionFromPrefsOrBundle(savedInstanceState: Bundle?) {
+        val prefs = sessionPrefs()
+        val fromBundle = savedInstanceState?.getBoolean(KEY_STATS_OBSERVABLE, false) == true
+        val fromPrefs = prefs.getBoolean(PREF_ACTIVE, false)
+
+        if (fromBundle && savedInstanceState != null) {
+            isStatsObserveable = true
+            stepCounterBase = savedInstanceState.getFloat(KEY_STEP_BASE, 0f)
+            stepCounter = savedInstanceState.getFloat(KEY_STEP_CURRENT, stepCounterBase)
+            isChronometerPaused = savedInstanceState.getBoolean(KEY_CHRONO_PAUSED, false)
+            elapsedWhenPaused = savedInstanceState.getLong(KEY_ELAPSED_PAUSED, 0L)
+            currStepCounter = savedInstanceState.getFloat(KEY_CURR_STEPS, 0f)
+            distanceSpent = savedInstanceState.getFloat(KEY_DISTANCE, 0f)
+            kcalBurned = savedInstanceState.getFloat(KEY_KCAL, 0f)
+        } else if (fromPrefs) {
+            isStatsObserveable = true
+            stepCounterBase = prefs.getFloat(PREF_STEP_BASE, 0f)
+            isChronometerPaused = prefs.getBoolean(PREF_PAUSED, false)
+            elapsedWhenPaused = prefs.getLong(PREF_ELAPSED_PAUSED, 0L)
+            currStepCounter = prefs.getFloat(PREF_CURR_STEPS, 0f)
+            distanceSpent = prefs.getFloat(PREF_DISTANCE, 0f)
+            kcalBurned = prefs.getFloat(PREF_KCAL, 0f)
+            stepCounter = stepCounterBase // будет обновлено при первом onSensorChanged
+        } else {
+            return
+        }
+
+        if (isStatsObserveable) {
+            if (isChronometerPaused) {
+                cChronometer.base = SystemClock.elapsedRealtime() - elapsedWhenPaused
+                cChronometer.stop()
+            } else {
+                val base = if (fromBundle && savedInstanceState != null)
+                    savedInstanceState.getLong(KEY_CHRONO_BASE, 0L)
+                else
+                    prefs.getLong(PREF_CHRONO_BASE, 0L)
+                if (base != 0L) {
+                    cChronometer.base = base
+                }
+                cChronometer.start()
+            }
+            bStartButton.visibility = View.GONE
+            bPauseButton.visibility = View.VISIBLE
+            bStopButton.visibility = View.VISIBLE
+            bPauseButton.text = if (isChronometerPaused) "Продолжить" else "Пауза"
+            updateStatsDisplay()
+            startSessionService()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_STATS_OBSERVABLE, isStatsObserveable)
+        outState.putFloat(KEY_STEP_BASE, stepCounterBase)
+        outState.putFloat(KEY_STEP_CURRENT, stepCounter)
+        outState.putBoolean(KEY_CHRONO_PAUSED, isChronometerPaused)
+        outState.putLong(KEY_ELAPSED_PAUSED, elapsedWhenPaused)
+        outState.putFloat(KEY_CURR_STEPS, currStepCounter)
+        outState.putFloat(KEY_DISTANCE, distanceSpent)
+        outState.putFloat(KEY_KCAL, kcalBurned)
+        if (isStatsObserveable) {
+            val base = if (isChronometerPaused) {
+                SystemClock.elapsedRealtime() - elapsedWhenPaused
+            } else {
+                cChronometer.base
+            }
+            outState.putLong(KEY_CHRONO_BASE, base)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        // Если сессия была активна (по префам) — восстановить UI и таймер
+        if (sessionPrefs().getBoolean(PREF_ACTIVE, false) && !isStatsObserveable) {
+            restoreSessionFromPrefsOrBundle(null)
+        }
+        if (isStatsObserveable) {
+            // Сессия идёт: данные считает сервис в фоне, подтягиваем из префов раз в секунду
+            syncChronometerAfterReturn()
+            refreshFromPrefsRunnable.run()
+        } else {
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }
     }
 
     override fun onPause() {
+        if (isStatsObserveable) {
+            refreshHandler.removeCallbacks(refreshFromPrefsRunnable)
+            saveSessionToPrefs()
+        } else {
+            sensorManager.unregisterListener(this)
+        }
         super.onPause()
-        sensorManager.unregisterListener(this)
+    }
+
+    private fun startSessionService() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+            }
+        }
+        val intent = Intent(this, SessionForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
+
+    private fun stopSessionService() {
+        stopService(Intent(this, SessionForegroundService::class.java))
+    }
+
+    /** Синхронизирует отображение таймера после возврата на экран (время шло в фоне). */
+    private fun syncChronometerAfterReturn() {
+        if (isChronometerPaused) return
+        val elapsed = SystemClock.elapsedRealtime() - cChronometer.base
+        cChronometer.base = SystemClock.elapsedRealtime() - elapsed
+        cChronometer.start()
+    }
+
+    private fun updateStatsDisplay() {
+        tvStepsCounter.text = "Steps: ${currStepCounter.toInt()}"
+        tvDistanceSpent.text = "Distance: $distanceSpent m"
+        tvKcalBurned.text = "Burned: $kcalBurned kcal"
+    }
+
+    companion object {
+        private const val PREF_ACTIVE = "session_active"
+        private const val PREF_CHRONO_BASE = "chrono_base"
+        private const val PREF_PAUSED = "chrono_paused"
+        private const val PREF_ELAPSED_PAUSED = "elapsed_paused"
+        private const val PREF_STEP_BASE = "step_base"
+        private const val PREF_CURR_STEPS = "curr_steps"
+        private const val PREF_DISTANCE = "distance"
+        private const val PREF_KCAL = "kcal"
+        private const val KEY_STATS_OBSERVABLE = "stats_observable"
+        private const val KEY_STEP_BASE = "step_base"
+        private const val KEY_STEP_CURRENT = "step_current"
+        private const val KEY_CHRONO_BASE = "chrono_base"
+        private const val KEY_CHRONO_PAUSED = "chrono_paused"
+        private const val KEY_ELAPSED_PAUSED = "elapsed_paused"
+        private const val KEY_CURR_STEPS = "curr_steps"
+        private const val KEY_DISTANCE = "distance"
+        private const val KEY_KCAL = "kcal"
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
